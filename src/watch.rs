@@ -117,6 +117,26 @@ pub fn start_clipboard_watcher(tx: Sender<Incoming>, ctx: egui::Context, ignore:
     });
 }
 
+/// Whether macOS shows its floating preview (bottom-right) after ⌘⇧3/4/5.
+/// While it shows (about 5 seconds), the screenshot isn't saved yet, so Snip Shelf can't see it.
+pub fn screenshot_preview_enabled() -> bool {
+    match std::process::Command::new("defaults")
+        .args(["read", "com.apple.screencapture", "show-thumbnail"])
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() != "0",
+        _ => true, // not set means macOS's default: preview on
+    }
+}
+
+/// Turn the macOS screenshot preview on or off (the same switch as "Show Floating Thumbnail"
+/// in the Screenshot app's Options menu).
+pub fn set_screenshot_preview(on: bool) {
+    let _ = std::process::Command::new("defaults")
+        .args(["write", "com.apple.screencapture", "show-thumbnail", "-bool", if on { "true" } else { "false" }])
+        .status();
+}
+
 /// Where macOS saves screenshots and recordings (Desktop unless changed in the Screenshot app).
 pub fn screenshot_folder() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -195,7 +215,7 @@ pub fn start_folder_watcher(tx: Sender<Incoming>, ctx: egui::Context, auto_copy:
         }
         let mut pending: HashMap<PathBuf, u64> = HashMap::new();
         loop {
-            std::thread::sleep(Duration::from_millis(1200));
+            std::thread::sleep(Duration::from_millis(500));
             let Ok(rd) = std::fs::read_dir(&folder) else { continue };
             for e in rd.flatten() {
                 let p = e.path();

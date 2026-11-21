@@ -142,10 +142,13 @@ pub fn save_history(items: &[Item]) {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub hide_after_copy: bool,
     pub auto_copy_new_captures: bool,
     pub max_items: usize,
+    /// The tip about the macOS screenshot preview was closed.
+    pub preview_tip_dismissed: bool,
 }
 
 impl Default for Settings {
@@ -154,6 +157,7 @@ impl Default for Settings {
             hide_after_copy: true,
             auto_copy_new_captures: false,
             max_items: 300,
+            preview_tip_dismissed: false,
         }
     }
 }

@@ -59,6 +59,10 @@ struct App {
     thumbs: HashMap<u64, TextureHandle>,
     thumb_pending: HashSet<u64>,
     thumb_failed: HashSet<u64>,
+    /// When each preview was last on screen.
+    thumb_seen: HashMap<u64, f64>,
+    /// Whether macOS shows its floating screenshot preview (which delays saving by ~5 s).
+    preview_on: bool,
     filter: Filter,
     query: String,
     selected: usize,
@@ -76,23 +80,18 @@ struct App {
 }
 
 fn setup_fonts(ctx: &egui::Context) {
+    // Small macOS fonts only (under 1 MB each). Anything they lack — Chinese, Arabic, emoji… —
+    // is fetched from the system on demand, so no big font sits in memory all the time.
     let mut fonts = FontDefinitions::default();
     let candidates = [
-        ("arial", "/System/Library/Fonts/Supplemental/Arial.ttf", true),
-        ("arial_unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", false),
-        ("apple_symbols", "/System/Library/Fonts/Apple Symbols.ttf", false),
+        ("arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+        ("apple_symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
     ];
-    for (name, path, primary) in candidates {
+    for (name, path) in candidates {
         if let Ok(bytes) = std::fs::read(path) {
             fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
-            let fam = fonts.families.entry(FontFamily::Proportional).or_default();
-            if primary {
-                fam.insert(0, name.to_owned());
-            } else {
-                fam.push(name.to_owned());
-            }
-            if !primary {
-                fonts.families.entry(FontFamily::Monospace).or_default().push(name.to_owned());
+            for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+                fonts.families.entry(fam).or_default().push(name.to_owned());
             }
         }
     }
@@ -181,6 +180,8 @@ impl App {
             thumbs: HashMap::new(),
             thumb_pending: HashSet::new(),
             thumb_failed: HashSet::new(),
+            thumb_seen: HashMap::new(),
+            preview_on: if sample_mode { std::env::var("SNIP_SHELF_DEMO_TIP").is_ok() } else { watch::screenshot_preview_enabled() },
             filter: Filter::All,
             query: String::new(),
             selected: 0,
@@ -537,7 +538,8 @@ impl App {
         let Some(shot) = self.shot.as_mut() else { return };
         shot.frames += 1;
         ctx.request_repaint();
-        if shot.frames >= 120 && !shot.requested {
+        let wanted: u32 = std::env::var("SNIP_SHELF_SHOT_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
+        if shot.frames >= wanted && !shot.requested {
             shot.requested = true;
             let path = shot.path.clone();
             let done = shot.done.clone();
@@ -558,7 +560,7 @@ impl App {
                 ctx2.request_repaint();
             });
         }
-        if shot.done.load(Ordering::SeqCst) || shot.frames > 900 {
+        if shot.done.load(Ordering::SeqCst) || shot.frames > wanted + 780 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -699,19 +701,22 @@ impl eframe::App for App {
             }
         }
 
-        // Ask for thumbnails of pictures and videos that don't have one yet.
+        // Previews are made only for cards on screen, and dropped again a little while after
+        // they scroll away or the window hides, so memory stays small even with a long history.
         if !self.sample_mode {
-            let need: Vec<(u64, PathBuf, Kind)> = self
-                .items
-                .iter()
-                .filter(|i| matches!(i.kind, Kind::Image | Kind::Video))
-                .filter(|i| !self.thumbs.contains_key(&i.id) && !self.thumb_pending.contains(&i.id))
-                .filter_map(|i| i.path.clone().map(|p| (i.id, p, i.kind)))
-                .take(6)
+            let stale: Vec<u64> = self
+                .thumbs
+                .keys()
+                .copied()
+                .filter(|id| self.thumb_seen.get(id).map(|t| now - t > 20.0).unwrap_or(true))
                 .collect();
-            for (id, p, k) in need {
-                self.thumb_pending.insert(id);
-                watch::start_thumbnail(self.tx.clone(), ctx.clone(), id, p, k);
+            for id in stale {
+                self.thumbs.remove(&id);
+                self.thumb_pending.remove(&id);
+                self.thumb_seen.remove(&id);
+            }
+            if !self.thumbs.is_empty() {
+                ctx.request_repaint_after(std::time::Duration::from_secs(21));
             }
         }
 
@@ -773,6 +778,16 @@ impl eframe::App for App {
                                     .changed();
                                 ui.label("items");
                             });
+                            let mut instant = !self.preview_on;
+                            if ui
+                                .checkbox(&mut instant, "Instant screenshots (skip the macOS preview in the corner)")
+                                .on_hover_text("macOS waits about 5 seconds while its preview shows before saving a screenshot")
+                                .changed()
+                                && !self.sample_mode
+                            {
+                                self.preview_on = !instant;
+                                watch::set_screenshot_preview(self.preview_on);
+                            }
                             ui.separator();
                             ui.label(
                                 RichText::new(format!("Watching screenshots in:\n{}", watch::screenshot_folder().display()))
@@ -901,10 +916,55 @@ impl eframe::App for App {
         let mut to_delete: Option<u64> = None;
         let mut to_pin: Option<u64> = None;
         let mut to_reveal: Option<PathBuf> = None;
+        let mut seen_thumbs: Vec<u64> = Vec::new();
+        let mut want_thumbs: Vec<(u64, PathBuf, Kind)> = Vec::new();
         let latest_id = self.items.first().map(|i| i.id);
         egui::CentralPanel::default()
             .frame(Frame::new().fill(BG).inner_margin(Margin { left: 14, right: 14, top: 10, bottom: 6 }))
             .show(ui, |ui| {
+                // Tip: macOS holds new screenshots in its corner preview for ~5 s before saving them.
+                if self.preview_on && !self.settings.preview_tip_dismissed {
+                    let mut turn_off = false;
+                    let mut dismiss = false;
+                    Frame::new()
+                        .fill(ACCENT.gamma_multiply(0.14))
+                        .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.5)))
+                        .corner_radius(CornerRadius::same(12))
+                        .inner_margin(Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new("Want screenshots here instantly?").size(13.5).strong());
+                            ui.label(
+                                RichText::new(
+                                    "macOS keeps a new screenshot in the little preview at the bottom-right for about 5 seconds before saving it, so it shows up here only after that preview goes away.",
+                                )
+                                .size(12.0)
+                                .color(MUTED),
+                            );
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                let b = egui::Button::new(RichText::new("Make it instant").color(Color32::WHITE).strong())
+                                    .fill(ACCENT)
+                                    .corner_radius(CornerRadius::same(8));
+                                if ui.add(b).on_hover_text("Turns off the macOS corner preview").clicked() {
+                                    turn_off = true;
+                                }
+                                if ui.add(egui::Button::new("Keep the preview").corner_radius(CornerRadius::same(8))).clicked() {
+                                    dismiss = true;
+                                }
+                            });
+                        });
+                    ui.add_space(8.0);
+                    if turn_off && !self.sample_mode {
+                        self.preview_on = false;
+                        watch::set_screenshot_preview(false);
+                        self.toast = Some(("Done — new screenshots will appear right away".into(), now));
+                    }
+                    if dismiss && !self.sample_mode {
+                        self.settings.preview_tip_dismissed = true;
+                        model::save_settings(&self.settings);
+                    }
+                }
                 if visible.is_empty() {
                     ui.add_space(60.0);
                     ui.vertical_centered(|ui| {
@@ -1022,6 +1082,9 @@ impl eframe::App for App {
                                                             let scale = (maxw / size.x).min(150.0 / size.y).min(1.0);
                                                             let img_size = size * scale;
                                                             let (r, _) = ui.allocate_exact_size(img_size, Sense::hover());
+                                                            if ui.is_rect_visible(r) {
+                                                                seen_thumbs.push(item.id);
+                                                            }
                                                             egui::Image::new((tex.id(), img_size))
                                                                 .corner_radius(CornerRadius::same(8))
                                                                 .paint_at(ui, r);
@@ -1038,7 +1101,22 @@ impl eframe::App for App {
                                                         } else if item.kind == Kind::File || self.thumb_failed.contains(&item.id) {
                                                             // no picture for plain files or unreadable ones
                                                         } else {
-                                                            ui.label(RichText::new("Making preview…").size(12.0).color(MUTED));
+                                                            // Same-size placeholder, so cards don't jump when the preview arrives.
+                                                            let w = ui.available_width().min(267.0);
+                                                            let (r, _) = ui.allocate_exact_size(Vec2::new(w, 150.0), Sense::hover());
+                                                            ui.painter().rect_filled(r, CornerRadius::same(8), BG);
+                                                            ui.painter().text(
+                                                                r.center(),
+                                                                egui::Align2::CENTER_CENTER,
+                                                                "Loading preview…",
+                                                                FontId::proportional(12.0),
+                                                                MUTED,
+                                                            );
+                                                            if ui.is_rect_visible(r) && !self.thumb_pending.contains(&item.id) {
+                                                                if let Some(p) = item.path.clone() {
+                                                                    want_thumbs.push((item.id, p, item.kind));
+                                                                }
+                                                            }
                                                         }
                                                         let name = if self.sample_mode {
                                                             match item.kind {
@@ -1070,6 +1148,16 @@ impl eframe::App for App {
 
         if let Some(id) = to_delete {
             self.delete(id);
+        }
+        for id in seen_thumbs {
+            self.thumb_seen.insert(id, now);
+        }
+        if !self.sample_mode {
+            for (id, p, k) in want_thumbs.into_iter().take(4) {
+                self.thumb_pending.insert(id);
+                self.thumb_seen.insert(id, now);
+                watch::start_thumbnail(self.tx.clone(), ctx.clone(), id, p, k);
+            }
         }
         if let Some(p) = to_reveal {
             if !self.sample_mode {

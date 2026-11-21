@@ -2,11 +2,18 @@
   <img src="docs/icon.png" width="128" alt="Snip Shelf icon">
 </p>
 
-<h1 align="center">Snip Shelf</h1>
+<h1 align="center">Snip Shelf — free clipboard manager for Mac</h1>
 
 <p align="center">
-  A clipboard history for your Mac that also keeps your <b>screenshots</b> and <b>screen recordings</b>.<br>
+  A free, open-source <b>clipboard history</b> app for macOS that also keeps your <b>screenshots</b> and <b>screen recordings</b>.<br>
+  Like <b>Win+V clipboard history</b> and the <b>Snipping Tool</b> on Windows, but for your MacBook.<br>
   Click anything you copied, snipped or recorded, then press <b>⌘V</b> to paste it again.
+</p>
+
+<p align="center">
+  <a href="https://rizalrifailab.github.io/snip-shelf/">Website</a> ·
+  <a href="../../releases/latest">Download</a> ·
+  <a href="#faq">FAQ</a>
 </p>
 
 <p align="center">
@@ -16,6 +23,8 @@
 <p align="center">
   <img src="docs/screenshot.png" width="420" alt="Snip Shelf window">
 </p>
+
+Snip Shelf is a lightweight **Mac clipboard manager** (a 6 MB download) that remembers every text you copy, every screenshot (⌘⇧3 / ⌘⇧4 / ⌘⇧5) and every screen recording. Open it with **Control+Shift+V** or from the menu bar, click an item, and paste it anywhere with ⌘V. It's free, works offline and runs on Apple Silicon (M1, M2, M3, M4) and Intel Macs.
 
 ## What it does
 
@@ -40,6 +49,26 @@
 When you first use **Snip** or **Record**, macOS asks for permission to record the screen. Allow it in **System Settings → Privacy & Security → Screen & System Audio Recording**.
 
 Works on macOS 11 Big Sur or newer, on both Apple-chip (M1/M2/M3/M4…) and Intel Macs.
+
+## FAQ
+
+**Is there a clipboard history on Mac like Win+V on Windows?**
+macOS doesn't have a built-in clipboard history. Snip Shelf adds one: press Control+Shift+V to see everything you copied.
+
+**How do I see what I copied earlier on my Mac?**
+Install Snip Shelf, then everything you copy from then on appears in its list. Search it, filter it by text, pictures or videos, and click to copy again.
+
+**Can I paste an old screenshot or screen recording?**
+Yes. Screenshots and recordings show up as cards with previews. Click one, then press ⌘V in Messages, Slack, Mail, Notes, Finder and so on.
+
+**Is it free? Does it upload my data?**
+It's free and open source (MIT). Everything stays on your Mac; nothing is sent anywhere. Passwords copied from password managers are skipped.
+
+**Why does a screenshot appear a few seconds late?**
+macOS saves a screenshot only after its little preview in the corner disappears. Turn on **Settings → Instant screenshots** in Snip Shelf to skip that preview.
+
+**What makes it different from other clipboard managers?**
+Snip Shelf keeps text, pictures *and* screen recordings in one history, and has its own Snip and Record buttons, so it does the clipboard-history job and the snipping-tool job in one small app.
 
 ## Where things are saved
 
