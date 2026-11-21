@@ -24,6 +24,7 @@
 - **Snip and Record buttons.** Capture part of the screen or record a video right from the app; the result is copied straight away.
 - **Click, then ⌘V.** Clicking a card puts it back on the clipboard and hides the window, so you can paste right where you were. Text pastes as text, pictures as pictures, and videos as the video file.
 - **Pin your favourites.** Pinned items are never cleared, even after you quit or restart.
+- **Clean up in one go.** "Delete history…" removes everything, or only text, only pictures or only videos, and always keeps your pinned items.
 - **Search and filters.** Show all items, or only Text, Pictures, Videos or Pinned.
 - **Always at hand.** Press **Control+Shift+V** anywhere, or use the icon in the menu bar.
 - **Private.** Everything stays on your Mac. Nothing is uploaded, and passwords copied from password managers are skipped.

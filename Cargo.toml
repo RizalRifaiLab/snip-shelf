@@ -1,6 +1,6 @@
 [package]
 name = "snip-shelf"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "A clipboard, screenshot and screen-recording history for macOS"
 license = "MIT"

@@ -49,6 +49,8 @@ struct Shot {
 
 struct App {
     items: Vec<Item>,
+    /// Asking "are you sure?" before deleting: None = all groups, Some(kind) = one group.
+    confirm_clear: Option<Option<Kind>>,
     settings: Settings,
     tx: Sender<Incoming>,
     rx: Receiver<Incoming>,
@@ -185,6 +187,7 @@ impl App {
             toast: None,
             flash: None,
             hide_at: None,
+            confirm_clear: None,
             dirty: false,
             shot: shot.map(|path| Shot { path, frames: 0, requested: false, done: Arc::new(AtomicBool::new(false)) }),
             sample_mode,
@@ -344,8 +347,15 @@ impl App {
     fn forget_files(&mut self, it: &Item, captures: &std::path::Path) {
         self.thumbs.remove(&it.id);
         if let Some(p) = &it.path {
-            if model::is_inside(p, captures) && it.kind == Kind::Image {
+            // Only files Snip Shelf saved itself are removed; your Desktop files stay.
+            if model::is_inside(p, captures) {
                 let _ = std::fs::remove_file(p);
+            }
+            if it.kind == Kind::Video {
+                if let Some(name) = p.file_name() {
+                    let thumb = model::thumbs_dir().join(format!("{}.png", name.to_string_lossy()));
+                    let _ = std::fs::remove_file(thumb);
+                }
             }
         }
     }
@@ -359,15 +369,27 @@ impl App {
         }
     }
 
-    fn clear_unpinned(&mut self) {
+    /// How many items a delete would remove: never pinned ones; `group` None means every kind.
+    fn clearable(&self, group: Option<Kind>) -> usize {
+        self.items.iter().filter(|i| !i.pinned && group_matches(i.kind, group)).count()
+    }
+
+    fn clear_group(&mut self, group: Option<Kind>) -> usize {
         let captures = model::captures_dir();
-        let gone: Vec<Item> = self.items.iter().filter(|i| !i.pinned).cloned().collect();
-        self.items.retain(|i| i.pinned);
+        let gone: Vec<Item> = self
+            .items
+            .iter()
+            .filter(|i| !i.pinned && group_matches(i.kind, group))
+            .cloned()
+            .collect();
+        self.items.retain(|i| i.pinned || !group_matches(i.kind, group));
+        let n = gone.len();
         for it in gone {
             self.forget_files(&it, &captures);
         }
         self.selected = 0;
         self.dirty = true;
+        n
     }
 
     fn copy(&mut self, ctx: &egui::Context, id: u64) {
@@ -598,6 +620,11 @@ fn paint_kind_icon(painter: &egui::Painter, rect: egui::Rect, kind: Kind) {
             painter.rect_stroke(r, CornerRadius::same(2), s, egui::StrokeKind::Middle);
         }
     }
+}
+
+/// Whether an item belongs to a delete group (None = every kind).
+fn group_matches(kind: Kind, group: Option<Kind>) -> bool {
+    group.map(|g| g == kind).unwrap_or(true)
 }
 
 fn kind_color(kind: Kind) -> Color32 {
@@ -845,13 +872,26 @@ impl eframe::App for App {
                     };
                     ui.label(RichText::new(hint).size(11.5).color(MUTED));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(egui::Button::new(RichText::new("Clear unpinned").size(11.5)).corner_radius(CornerRadius::same(6)))
-                            .clicked()
-                            && !self.sample_mode
-                        {
-                            self.clear_unpinned();
-                        }
+                        ui.menu_button(RichText::new("Delete history…").size(11.5), |ui| {
+                            ui.set_min_width(220.0);
+                            ui.label(RichText::new("Pinned items are always kept").size(11.0).color(MUTED));
+                            ui.separator();
+                            let groups = [
+                                (None, "Delete everything"),
+                                (Some(Kind::Text), "Delete all text"),
+                                (Some(Kind::Image), "Delete all pictures"),
+                                (Some(Kind::Video), "Delete all videos"),
+                            ];
+                            for (group, label) in groups {
+                                let n = self.clearable(group);
+                                let color = if n > 0 { C_VIDEO } else { MUTED };
+                                let b = egui::Button::new(RichText::new(format!("{label}  ({n})")).color(color));
+                                if ui.add_enabled(n > 0, b).clicked() {
+                                    self.confirm_clear = Some(group);
+                                    ui.close();
+                                }
+                            }
+                        });
                     });
                 });
             });
@@ -1044,6 +1084,58 @@ impl eframe::App for App {
         }
         if let Some(id) = to_copy {
             self.copy(ctx, id);
+        }
+
+        // ---------- "Are you sure?" before deleting ----------
+        if let Some(group) = self.confirm_clear {
+            let n = self.clearable(group);
+            let what = match group {
+                None => "items",
+                Some(Kind::Text) => "text items",
+                Some(Kind::Image) => "pictures",
+                Some(Kind::Video) => "videos",
+                Some(Kind::File) => "files",
+            };
+            let pinned = self.items.iter().filter(|i| i.pinned && group_matches(i.kind, group)).count();
+            let mut choice: Option<bool> = None;
+            #[allow(deprecated)]
+            let modal = egui::Modal::new(egui::Id::new("confirm-clear")).show(ctx, |ui| {
+                ui.set_width(300.0);
+                ui.label(RichText::new(format!("Delete {n} {what}?")).size(16.0).strong());
+                ui.add_space(4.0);
+                let keep = if pinned > 0 {
+                    format!("Your {pinned} pinned item(s) will be kept. This can't be undone.")
+                } else {
+                    "Pinned items are always kept. This can't be undone.".to_string()
+                };
+                ui.label(RichText::new(keep).size(12.0).color(MUTED));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let del = egui::Button::new(RichText::new("Delete").color(Color32::WHITE).strong())
+                        .fill(C_VIDEO)
+                        .corner_radius(CornerRadius::same(8));
+                    if ui.add(del).clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.add(egui::Button::new("Cancel").corner_radius(CornerRadius::same(8))).clicked() {
+                        choice = Some(false);
+                    }
+                });
+            });
+            if modal.should_close() && choice.is_none() {
+                choice = Some(false);
+            }
+            match choice {
+                Some(true) => {
+                    self.confirm_clear = None;
+                    if !self.sample_mode {
+                        let removed = self.clear_group(group);
+                        self.toast = Some((format!("Deleted {removed} {what} — pinned items kept"), now));
+                    }
+                }
+                Some(false) => self.confirm_clear = None,
+                None => {}
+            }
         }
 
         // ---------- Toast ----------
